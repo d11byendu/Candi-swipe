@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Sugar Crush</title>
+<style>
+/* ============================================================
+   CONFIG VARIABLES
+   ============================================================ */
+:root {
+  --cell-size:  clamp(38px, 10vw, 62px);
+  --gap:        clamp(3px, 0.8vw, 5px);
+  --board-pad:  clamp(8px, 2vw, 14px);
+  --radius:     15px;
+
+  /* Animation */
+  --t-swap:      280ms;
+  --t-pop:       380ms;
+  --t-fall:      340ms;
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-fall:   cubic-bezier(0.22, 1.0,  0.36, 1);
+
+  /* Candy colours */
+  --c0: #ff4365;
+  --c1: #ff8c00;
+  --c2: #f5d800;
+  --c3: #00c97a;
+  --c4: #1e9fff;
+  --c5: #b44fff;
+
+  /* UI */
+  --panel:  rgba(255,255,255,0.07);
+  --border: rgba(255,255,255,0.13);
+  --text:   #f2ecff;
+  --dim:    #9b87c4;
+  --gold:   #ffe135;
+  --cyan:   #6ee7ff;
+  --pink:   #ff7eb6;
+}
+
+/* ============================================================
+   RESET
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  color: var(--text);
+}
+
+/* ============================================================
+   BACKGROUND — deep plum → teal, slowly animated
+   ============================================================ */
+body {
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%,   #3d0c6e 0%, transparent 60%),
+    radial-gradient(ellipse 70% 50% at 90% 100%,  #053d5a 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 50%,   #1e0840 0%, transparent 70%),
+    linear-gradient(160deg, #1a0533 0%, #0b1e3a 50%, #091828 100%);
+  animation: bg-breathe 14s ease-in-out infinite alternate;
+}
+@keyframes bg-breathe {
+  0%   { filter: hue-rotate(0deg)   brightness(1);    }
+  50%  { filter: hue-rotate(20deg)  brightness(1.06); }
+  100% { filter: hue-rotate(-12deg) brightness(0.96); }
+}
+
+/* Floating ambient orbs */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(circle 340px at 12% 22%,  rgba(140,60,255,0.22) 0%, transparent 70%),
+    radial-gradient(circle 280px at 84% 72%,  rgba(0,180,220,0.18)  0%, transparent 70%),
+    radial-gradient(circle 210px at 58% 8%,   rgba(255,80,130,0.14) 0%, transparent 65%),
+    radial-gradient(circle 190px at 28% 88%,  rgba(30,120,255,0.15) 0%, transparent 65%);
+  animation: orbs-drift 18s ease-in-out infinite alternate;
+}
+@keyframes orbs-drift {
+  0%   { transform: scale(1)    translateY(0px);  }
+  50%  { transform: scale(1.07) translateY(-10px); }
+  100% { transform: scale(0.96) translateY(6px);  }
+}
+
+/* Stars */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,0.75) 0%, transparent 100%),
+    radial-gradient(1px 1px at 38% 72%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(1px 1px at 65%  8%, rgba(255,255,255,0.65) 0%, transparent 100%),
+    radial-gradient(1px 1px at 88% 55%, rgba(255,255,255,0.45) 0%, transparent 100%),
+    radial-gradient(1px 1px at 22% 90%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(1px 1px at 75% 40%, rgba(200,180,255,0.55) 0%, transparent 100%),
+    radial-gradient(2px 2px at  5% 50%, rgba(255,255,255,0.3)  0%, transparent 100%),
+    radial-gradient(2px 2px at 92% 20%, rgba(180,220,255,0.4)  0%, transparent 100%);
+}
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+#app {
+  position: relative; z-index: 1;
+  width: 100%; height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: clamp(8px,2vh,18px) clamp(8px,2vw,18px);
+  gap: clamp(6px,1.5vh,12px);
+  overflow: hidden;
+}
+
+/* ============================================================
+   HUD
+   ============================================================ */
+#hud {
+  width: 100%; max-width: 560px;
+  display: flex; gap: 8px; flex-shrink: 0;
+}
+.hud-card {
+  flex: 1; min-width: 0;
+  background: var(--panel);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  padding: 8px 12px;
+  text-align: center;
+  backdrop-filter: blur(14px);
+  transition: transform 0.2s var(--ease-bounce);
+}
+.hud-card:hover { transform: translateY(-2px); }
+.hud-card .label {
+  font-size: clamp(9px,2vw,11px);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 2px;
+}
+.hud-card .value {
+  font-size: clamp(18px,4.5vw,28px);
+  font-weight: 900; line-height: 1;
+}
+#score-card .value { color: var(--gold); text-shadow: 0 0 14px rgba(255,225,53,0.55); }
+#moves-card .value { color: var(--cyan); text-shadow: 0 0 12px rgba(110,231,255,0.45); }
+#combo-card .value { color: var(--pink); text-shadow: 0 0 12px rgba(255,126,182,0.45); }
+
+.value.bump { animation: bump 0.38s var(--ease-bounce); }
+@keyframes bump {
+  0%  { transform: scale(1); }
+  45% { transform: scale(1.3); }
+  100%{ transform: scale(1); }
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+#btn-row { display: flex; gap: 6px; flex-shrink: 0; }
+.btn {
+  background: var(--panel);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: clamp(11px,2.5vw,13px);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 7px 16px;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  transition: background 0.2s, transform 0.15s var(--ease-bounce),
+              box-shadow 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+.btn:hover  { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.3);
+              box-shadow: 0 4px 18px rgba(0,0,0,0.3); }
+.btn:active { transform: scale(0.92); }
+.btn.primary {
+  background: linear-gradient(135deg, #ff4070, #c2006a);
+  border-color: transparent;
+  box-shadow: 0 6px 22px rgba(255,64,112,0.45);
+}
+.btn.primary:hover { filter: brightness(1.12); box-shadow: 0 8px 30px rgba(255,64,112,0.6); }
+
+/* ============================================================
+   BOARD
+   ============================================================ */
+#board-wrap {
+  flex: 1; display: flex;
+  align-items: center; justify-content: center;
+  min-height: 0;
+}
+
+#board {
+  display: grid;
+  grid-template-columns: repeat(8, var(--cell-size));
+  grid-template-rows:    repeat(8, var(--cell-size));
+  gap: var(--gap);
+  padding: var(--board-pad);
+  background: rgba(8,4,24,0.58);
+  border: 1.5px solid rgba(255,255,255,0.12);
+  border-radius: 24px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06) inset,
+    0 30px 90px rgba(0,0,0,0.7),
+    0 0 70px rgba(120,60,255,0.16),
+    0 0 130px rgba(0,150,220,0.09);
+  backdrop-filter: blur(18px);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Sweeping shimmer across board */
+#board::after {
+  content: '';
+  position: absolute;
+  top: -80%; left: -35%;
+  width: 28%; height: 260%;
+  background: linear-gradient(
+    108deg,
+    transparent 38%,
+    rgba(255,255,255,0.045) 50%,
+    transparent 62%
+  );
+  pointer-events: none;
+  animation: board-sheen 9s ease-in-out infinite;
+}
+@keyframes board-sheen {
+  0%   { transform: translateX(0%);    opacity: 0; }
+  8%   { opacity: 1; }
+  42%  { transform: translateX(520%);  opacity: 1; }
+  52%  { opacity: 0; }
+  100% { transform: translateX(520%);  opacity: 0; }
+}
+
+/* ============================================================
+   CELLS
+   ============================================================ */
+.cell {
+  position: relative;
+  width: var(--cell-size);
+  height: var(--cell-size);
+  border-radius: calc(var(--radius) - 2px);
+  overflow: visible;
+}
+.cell:nth-child(odd)  { background: rgba(255,255,255,0.048); }
+.cell:nth-child(even) { background: rgba(255,255,255,0.022); }
+
+/* ============================================================
+   CANDY BASE
+   ============================================================ */
+.candy {
+  position: absolute;
+  inset: 3px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  will-change: transform, opacity;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(17px,3.8vw,25px);
+  font-weight: 900;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.2s var(--ease-bounce), filter 0.18s ease, box-shadow 0.2s ease;
+}
+.candy:hover:not(.selected):not(.popping) {
+  transform: scale(1.08);
+  filter: brightness(1.12);
+}
+
+.candy[data-color="0"] {
+  background: linear-gradient(145deg, #ff7a92 0%, var(--c0) 55%, #b50030 100%);
+  box-shadow: 0 5px 14px rgba(255,67,101,0.6), 0 0 0 2px rgba(255,160,175,0.22) inset;
+}
+.candy[data-color="1"] {
+  background: linear-gradient(145deg, #ffba5a 0%, var(--c1) 55%, #b85e00 100%);
+  box-shadow: 0 5px 14px rgba(255,140,0,0.6), 0 0 0 2px rgba(255,215,140,0.22) inset;
+}
+.candy[data-color="2"] {
+  background: linear-gradient(145deg, #fff06a 0%, var(--c2) 55%, #aa9300 100%);
+  box-shadow: 0 5px 14px rgba(245,216,0,0.6), 0 0 0 2px rgba(255,248,110,0.22) inset;
+}
+.candy[data-color="3"] {
+  background: linear-gradient(145deg, #50f0a0 0%, var(--c3) 55%, #007845 100%);
+  box-shadow: 0 5px 14px rgba(0,201,122,0.6), 0 0 0 2px rgba(110,255,185,0.22) inset;
+}
+.candy[data-color="4"] {
+  background: linear-gradient(145deg, #72c8ff 0%, var(--c4) 55%, #0060c0 100%);
+  box-shadow: 0 5px 14px rgba(30,159,255,0.6), 0 0 0 2px rgba(140,210,255,0.22) inset;
+}
+.candy[data-color="5"] {
+  background: linear-gradient(145deg, #d580ff 0%, var(--c5) 55%, #6800b0 100%);
+  box-shadow: 0 5px 14px rgba(180,79,255,0.6), 0 0 0 2px rgba(225,155,255,0.22) inset;
+}
+
+/* Gloss bubble */
+.candy::before {
+  content: '';
+  position: absolute;
+  top: 7%; left: 9%;
+  width: 48%; height: 36%;
+  border-radius: 50% 50% 45% 40%;
+  background: rgba(255,255,255,0.38);
+  pointer-events: none;
+}
+
+/* ============================================================
+   SELECTED
+   ============================================================ */
+.candy.selected {
+  transform: scale(1.21) !important;
+  filter: brightness(1.35) saturate(1.2);
+  z-index: 10;
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 24px 8px rgba(255,255,255,0.65),
+    0 6px 16px rgba(0,0,0,0.35) !important;
+  animation: wiggle 0.6s ease-in-out infinite alternate;
+}
+@keyframes wiggle {
+  0%  { transform: scale(1.21) rotate(-4deg); }
+  100%{ transform: scale(1.21) rotate(4deg);  }
+}
+
+/* ============================================================
+   POP (match removal) — spring-style burst then collapse
+   ============================================================ */
+.candy.popping {
+  animation: pop-burst var(--t-pop) forwards;
+  pointer-events: none;
+  z-index: 5;
+}
+@keyframes pop-burst {
+  0%   { transform: scale(1);    opacity: 1; filter: brightness(1) blur(0px); }
+  25%  { transform: scale(1.5);  opacity: 1; filter: brightness(1.8) saturate(1.6) blur(0px); }
+  55%  { transform: scale(0.7);  opacity: 0.8; filter: brightness(1.2) blur(1px); }
+  80%  { transform: scale(0.3);  opacity: 0.3; filter: blur(3px); }
+  100% { transform: scale(0);    opacity: 0; filter: blur(5px); }
+}
+
+/* ============================================================
+   FALL-IN (new candy spawns)
+   ============================================================ */
+.candy.falling-in {
+  animation: fall-in var(--t-fall) forwards var(--ease-fall);
+}
+@keyframes fall-in {
+  0%   { transform: translateY(-90px) scale(0.5) rotate(-10deg); opacity: 0; }
+  65%  { transform: translateY(5px)   scale(1.06) rotate(1.5deg); opacity: 1; }
+  82%  { transform: translateY(-2px)  scale(0.98); }
+  100% { transform: translateY(0)     scale(1)    rotate(0deg);   opacity: 1; }
+}
+
+/* ============================================================
+   SHAKE (invalid move)
+   ============================================================ */
+.candy.shake {
+  animation: shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes shake {
+  0%,100%{ transform: translateX(0); }
+  14%    { transform: translateX(-7px) rotate(-2deg); }
+  28%    { transform: translateX(7px)  rotate(2deg);  }
+  42%    { transform: translateX(-5px) rotate(-1deg); }
+  57%    { transform: translateX(5px)  rotate(1deg);  }
+  71%    { transform: translateX(-3px); }
+  85%    { transform: translateX(3px);  }
+}
+
+/* ============================================================
+   STRIPED CANDY (4-match)
+   ============================================================ */
+.candy.striped::after {
+  content: '';
+  position: absolute;
+  inset: 17% 8%;
+  border-radius: 6px;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255,255,255,0.65) 0px, rgba(255,255,255,0.65) 3px,
+    transparent 3px, transparent 11px
+  );
+  animation: stripe-h 1.2s linear infinite;
+}
+.candy.striped.vertical::after {
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(255,255,255,0.65) 0px, rgba(255,255,255,0.65) 3px,
+    transparent 3px, transparent 11px
+  );
+  animation: stripe-v 1.2s linear infinite;
+}
+@keyframes stripe-h { from { background-position: 0   0; } to { background-position: 28px 0;   } }
+@keyframes stripe-v { from { background-position: 0   0; } to { background-position: 0   28px; } }
+
+/* ============================================================
+   BOMB CANDY (5-match)
+   ============================================================ */
+.candy.bomb {
+  background: radial-gradient(circle at 30% 28%,
+    #fff 0%, #d8d8d8 15%, #707070 44%, #1c1c1c 100%) !important;
+  box-shadow:
+    0 0 0 2.5px rgba(255,255,255,0.75),
+    0 0 26px 7px rgba(220,180,255,0.55) !important;
+  animation: bomb-pulse 1.4s ease-in-out infinite alternate;
+}
+@keyframes bomb-pulse {
+  0%  { box-shadow: 0 0 0 2px rgba(255,255,255,0.6), 0 0 20px 4px rgba(180,100,255,0.4);
+        filter: brightness(1); }
+  100%{ box-shadow: 0 0 0 4px rgba(255,255,255,1),   0 0 44px 12px rgba(220,180,255,0.85);
+        filter: brightness(1.22); }
+}
+.candy.bomb::before { display: none; }
+.candy.bomb::after {
+  content: '💣';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: clamp(15px,3.5vw,22px);
+  pointer-events: none;
+  filter: drop-shadow(0 0 7px rgba(255,200,100,0.9));
+}
+
+/* ============================================================
+   SCORE POPUPS
+   ============================================================ */
+.score-popup {
+  position: absolute;
+  font-size: clamp(13px,3vw,19px);
+  font-weight: 900;
+  color: var(--gold);
+  text-shadow: 0 0 14px rgba(255,225,53,0.75), 0 2px 6px rgba(0,0,0,0.5);
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  animation: float-score 1.05s ease-out forwards;
+}
+@keyframes float-score {
+  0%   { transform: translateY(0)     scale(0.65); opacity: 0; }
+  12%  { transform: translateY(-8px)  scale(1.25); opacity: 1; }
+  65%  { transform: translateY(-44px) scale(1.0);  opacity: 1; }
+  100% { transform: translateY(-72px) scale(0.85); opacity: 0; }
+}
+
+/* ============================================================
+   PARTICLE BURST
+   ============================================================ */
+.particle {
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 90;
+  animation: p-burst 0.65s ease-out forwards;
+}
+@keyframes p-burst {
+  0%   { transform: translate(0,0)   scale(1.2); opacity: 1; }
+  100% { transform: var(--pt)        scale(0.1); opacity: 0; }
+}
+
+/* ============================================================
+   OVERLAY SCREENS
+   ============================================================ */
+.screen {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: clamp(12px,3vh,22px);
+  background: rgba(10,4,28,0.9);
+  backdrop-filter: blur(24px);
+  padding: 24px; text-align: center;
+  animation: screen-in 0.48s var(--ease-bounce);
+}
+@keyframes screen-in {
+  from { opacity: 0; transform: scale(0.9) translateY(14px); }
+  to   { opacity: 1; transform: scale(1)   translateY(0);    }
+}
+.screen.hidden { display: none; }
+
+.screen-title {
+  font-size: clamp(34px,9vw,60px);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #ffe135 0%, #ff4070 40%, #b44fff 75%, #1e9fff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.08;
+  animation: title-glow 3.5s ease-in-out infinite alternate;
+}
+@keyframes title-glow {
+  0%  { filter: drop-shadow(0 0 16px rgba(255,200,50,0.3)); }
+  100%{ filter: drop-shadow(0 0 34px rgba(180,79,255,0.55)); }
+}
+.screen-sub { font-size: clamp(13px,3vw,17px); color: var(--dim); max-width: 300px; line-height: 1.55; }
+.screen-score {
+  font-size: clamp(46px,10vw,72px); font-weight: 900;
+  color: var(--gold); text-shadow: 0 0 30px rgba(255,225,53,0.55);
+  animation: bump 0.5s var(--ease-bounce) 0.25s both;
+}
+.screen-label {
+  font-size: clamp(11px,2.5vw,14px); color: var(--dim);
+  text-transform: uppercase; letter-spacing: 0.14em; margin-top: -12px;
+}
+.highscore-row { font-size: clamp(13px,2.8vw,16px); color: var(--dim); }
+.highscore-row span { color: var(--cyan); font-weight: 700; }
+
+/* ============================================================
+   CANDY RAIN (start-screen decoration)
+   ============================================================ */
+.candy-rain { position: fixed; inset: 0; pointer-events: none; z-index: 199; overflow: hidden; }
+.rain-drop {
+  position: absolute; border-radius: 50%; opacity: 0;
+  box-shadow: 0 0 8px rgba(255,255,255,0.3);
+  animation: rain-fall linear infinite;
+}
+@keyframes rain-fall {
+  0%   { opacity: 0;   transform: translateY(-50px) rotate(0deg)   scale(0.8); }
+  8%   { opacity: 0.9; }
+  88%  { opacity: 0.6; }
+  100% { opacity: 0;   transform: translateY(110vh) rotate(420deg) scale(1.1); }
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-height: 680px) {
+  :root { --cell-size: clamp(32px,9vw,50px); --gap: 3px; --board-pad: 7px; }
+  .hud-card { padding: 5px 8px; }
+}
+@media (max-width: 400px) {
+  :root { --cell-size: clamp(30px,10.5vw,42px); --gap: 3px; --board-pad: 6px; }
+  .btn { padding: 6px 10px; font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<div class="candy-rain" id="candy-rain"></div>
+
+<!-- START SCREEN -->
+<div class="screen" id="start-screen">
+  <div class="screen-title">🍬 Sugar<br>Crush</div>
+  <div class="screen-sub">Swap adjacent candies to match 3 or more.<br>Chain combos for massive points!</div>
+  <div class="highscore-row" id="start-hs">Best: <span>—</span></div>
+  <button class="btn primary" id="btn-start"
+    style="font-size:clamp(15px,3.5vw,20px);padding:13px 40px;margin-top:4px;">▶ Play</button>
+  <div style="font-size:11px;color:var(--dim);margin-top:-4px;">30 moves · 8×8 board</div>
+</div>
+
+<!-- GAME OVER -->
+<div class="screen hidden" id="gameover-screen">
+  <div class="screen-title">Game<br>Over!</div>
+  <div class="screen-score" id="go-score">0</div>
+  <div class="screen-label">Final Score</div>
+  <div class="highscore-row" id="go-hs">Best: <span>—</span></div>
+  <div id="go-new-hs" style="color:var(--gold);font-weight:700;font-size:clamp(14px,3vw,18px);display:none;">
+    🏆 New High Score!
+  </div>
+  <div style="display:flex;gap:10px;margin-top:4px;">
+    <button class="btn primary" id="btn-restart">▶ Play Again</button>
+    <button class="btn" id="btn-menu">Menu</button>
+  </div>
+</div>
+
+<!-- PAUSE -->
+<div class="screen hidden" id="pause-screen">
+  <div class="screen-title" style="font-size:clamp(28px,7vw,50px);">Paused ☕</div>
